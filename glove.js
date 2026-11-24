@@ -119,9 +119,12 @@ async function connect() {
   if(!navigator.bluetooth){message('Android Chrome에서 HTTPS 주소로 열어주세요.'); return;}
   const id=++session;
   ui.connect.disabled=true;
-  message('SURGlove 검색 중…');
+  message('장갑 검색 중…');
   try {
-    const selected=await navigator.bluetooth.requestDevice({filters:[{name:'SURGlove'}], optionalServices:[uuid(1)]});
+    const selected=await navigator.bluetooth.requestDevice({
+      filters:[{services:[uuid(1)]},{name:'HandPose'},{name:'SURGlove'}],
+      optionalServices:[uuid(1)]
+    });
     device=selected;
     device.addEventListener('gattserverdisconnected',()=>{if(id===session) connection(false,'장갑 연결이 끊겼습니다.');},{once:true});
     const server=await device.gatt.connect();
@@ -148,20 +151,35 @@ ui.zero.onclick=()=>{
 window.addEventListener('keydown',ev=>{if(ev.key.toLowerCase()==='n'&&!ui.zero.disabled) ui.zero.click();});
 
 const drawMesh = model.skin && createGloveMesh(ui.hand, model);
-function draw() {
+const displayedPose = pose.map(q=>q.map(()=>0));
+let displayedRotation=[1,0,0,0], previousDraw;
+function draw(now=performance.now()) {
+  const dt=Math.min(50,previousDraw===undefined?16:now-previousDraw);
+  previousDraw=now;
+  const blend=1-Math.exp(-dt/32);
+  for(let f=0;f<5;f++) for(let j=0;j<4;j++){
+    const target=(fitted?pose[f][j]-zero[f][j]:0)*rad;
+    const difference=target-displayedPose[f][j];
+    displayedPose[f][j]=Math.abs(difference)<.001?target:displayedPose[f][j]+blend*difference;
+  }
+  const targetRotation=mul(neutral,attitude);
+  const sign=dot(displayedRotation,targetRotation)<0?-1:1;
+  displayedRotation=displayedRotation.map((v,i)=>v+blend*(sign*targetRotation[i]-v));
+  const norm=Math.hypot(...displayedRotation);
+  displayedRotation=displayedRotation.map(v=>v/norm);
   const canvas=ui.hand, w=canvas.clientWidth, h=canvas.clientHeight, dpr=Math.min(2,devicePixelRatio);
   if(canvas.width!==Math.round(w*dpr) || canvas.height!==Math.round(h*dpr)){
     canvas.width=Math.round(w*dpr); canvas.height=Math.round(h*dpr);
   }
   if(drawMesh && w && h){
-    drawMesh(pose.map((q,f)=>q.map((x,j)=>(fitted?x-zero[f][j]:0)*rad)),mul(neutral,attitude),w,h);
+    drawMesh(displayedPose,displayedRotation,w,h);
     requestAnimationFrame(draw);
     return;
   }
   const cx=canvas.getContext('2d');
   cx.setTransform(dpr,0,0,dpr,0,0);
   cx.clearRect(0,0,w,h);
-  const scale=Math.min(w/205,h/225), rotation=mul(neutral,attitude);
+  const scale=Math.min(w/205,h/225), rotation=displayedRotation;
   const items=[];
   const project=p=>{
     const [x,y,z]=rotate(rotation,[p[0],p[1]-48,p[2]]);
@@ -195,7 +213,7 @@ function draw() {
   shape(circle(28),'#a76236',circle(16));
   for(let f=0;f<5;f++){
     let p=model.base[f], axes=model.frames[f].map((_,i)=>model.frames[f].map(row=>row[i]));
-    const q=pose[f].map((x,i)=>(x-zero[f][i])*rad);
+    const q=displayedPose[f];
     const mix=(a,b,t)=>a.map((x,i)=>x*Math.cos(t)+b[i]*Math.sin(t));
     [axes[0],axes[1]]=[mix(axes[0],axes[1],q[3]),mix(axes[1],axes[0],-q[3])];
     for(let j=0;j<3;j++){

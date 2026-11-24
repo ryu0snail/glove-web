@@ -13,6 +13,7 @@ try {
 } catch {}
 let attitude = [1,0,0,0], timestamp, fitted, lastFit = 0, lastFrame = 0;
 let device, command, heartbeat, connected = false, session = 0;
+let connectedAt = 0;
 const message = text => { ui.status.textContent = text; };
 const rad = Math.PI/180;
 const dot = (a,b) => a.reduce((s,x,i)=>s+x*b[i],0);
@@ -95,6 +96,7 @@ function receive(frame) {
 }
 function connection(state, text) {
   connected=state;
+  connectedAt=state?performance.now():0;
   ui.connect.disabled=false;
   ui.connect.textContent=state?'연결 해제':'장갑 연결';
   message(text);
@@ -115,7 +117,12 @@ async function connect() {
     else window.AndroidGlove.connect();
     return;
   }
-  if(connected){device.gatt.disconnect(); return;}
+  if(connected){
+    session++;
+    device.gatt.disconnect();
+    connection(false,'장갑 연결을 해제했습니다.');
+    return;
+  }
   if(!navigator.bluetooth){message('Android Chrome에서 HTTPS 주소로 열어주세요.'); return;}
   const id=++session;
   ui.connect.disabled=true;
@@ -126,7 +133,9 @@ async function connect() {
       optionalServices:[uuid(1)]
     });
     device=selected;
-    device.addEventListener('gattserverdisconnected',()=>{if(id===session) connection(false,'장갑 연결이 끊겼습니다.');},{once:true});
+    device.addEventListener('gattserverdisconnected',()=>{
+      if(id===session) connection(false,'장갑 연결이 끊겼습니다. 다른 기기의 연결을 해제하고 다시 연결하세요.');
+    },{once:true});
     const server=await device.gatt.connect();
     const service=await server.getPrimaryService(uuid(1));
     command=await service.getCharacteristic(uuid(3));
@@ -138,8 +147,9 @@ async function connect() {
     connection(true,'연결됨 · 센서 데이터 대기 중');
     heartbeat=setInterval(()=>keepalive().catch(()=>device.gatt.disconnect()),1000);
   } catch(error){
+    session++;
     if(device?.gatt.connected) device.gatt.disconnect();
-    connection(false,'연결 실패 · '+error.message);
+    connection(false,'장갑 전원을 확인하고, 다른 기기에서 연결을 해제한 뒤 다시 시도하세요.');
   }
 }
 ui.connect.onclick=connect;
@@ -151,6 +161,7 @@ ui.zero.onclick=()=>{
 window.addEventListener('keydown',ev=>{if(ev.key.toLowerCase()==='n'&&!ui.zero.disabled) ui.zero.click();});
 
 const drawMesh = model.skin && createGloveMesh(ui.hand, model);
+const constrainPose = createContacts(model);
 const displayedPose = pose.map(q=>q.map(()=>0));
 let displayedRotation=[1,0,0,0], previousDraw;
 function draw(now=performance.now()) {
@@ -172,7 +183,7 @@ function draw(now=performance.now()) {
     canvas.width=Math.round(w*dpr); canvas.height=Math.round(h*dpr);
   }
   if(drawMesh && w && h){
-    drawMesh(displayedPose,displayedRotation,w,h);
+    drawMesh(constrainPose(displayedPose),displayedRotation,w,h);
     requestAnimationFrame(draw);
     return;
   }
@@ -211,9 +222,10 @@ function draw(now=performance.now()) {
     return [model.coil[0]+r*Math.cos(t),model.coil[1]+r*Math.sin(t),9];
   });
   shape(circle(28),'#a76236',circle(16));
+  const safePose=constrainPose(displayedPose);
   for(let f=0;f<5;f++){
     let p=model.base[f], axes=model.frames[f].map((_,i)=>model.frames[f].map(row=>row[i]));
-    const q=displayedPose[f];
+    const q=safePose[f];
     const mix=(a,b,t)=>a.map((x,i)=>x*Math.cos(t)+b[i]*Math.sin(t));
     [axes[0],axes[1]]=[mix(axes[0],axes[1],q[3]),mix(axes[1],axes[0],-q[3])];
     for(let j=0;j<3;j++){
@@ -227,7 +239,7 @@ function draw(now=performance.now()) {
   requestAnimationFrame(draw);
 }
 setInterval(()=>{
-  if(connected && lastFrame && performance.now()-lastFrame>1600){
+  if(connected && performance.now()-(lastFrame||connectedAt)>1600){
     ui.zero.disabled=true;
     message('센서 데이터가 멈췄습니다. 장갑 연결을 확인해주세요.');
   }

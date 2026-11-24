@@ -35,7 +35,7 @@ function createGloveMesh(canvas, model) {
       vec3 n=normalize(rotation*normal);
       float shade=.49+.70*max(0.,dot(n,normalize(vec3(-.42,.61,.74))));
       lit=color*shade+.036*pow(max(n.z,0.),10.);
-      gl_Position=vec4(p.xy*scale,-p.z/200.,1.-p.z/390.);
+      gl_Position=vec4(p.xy*scale,-p.z/390.,1.-p.z/390.);
     }`));
   gl.attachShader(program,shader(gl.FRAGMENT_SHADER,`
     precision mediump float;
@@ -107,11 +107,22 @@ function createGloveMesh(canvas, model) {
   return (pose,attitude,w,h)=>{
     const key=JSON.stringify(pose);
     if(key!==lastPose){deform(pose); lastPose=key;}
-    const size=Math.min(w/205,h/235);
+    const horizontal=rotate(attitude,[1,0,0]);
+    const vertical=rotate(attitude,[0,1,0]);
+    const depth=rotate(attitude,[0,0,1]);
+    let extentX=0, extentY=0;
+    for(let i=0;i<vertices.length;i+=6){
+      const x=vertices[i], y=vertices[i+1]-48, z=vertices[i+2];
+      const perspective=1-(horizontal[2]*x+vertical[2]*y+depth[2]*z)/390;
+      extentX=Math.max(extentX,Math.abs(horizontal[0]*x+vertical[0]*y+depth[0]*z)/perspective);
+      extentY=Math.max(extentY,Math.abs(horizontal[1]*x+vertical[1]*y+depth[1]*z)/perspective);
+    }
+    const margin=Math.min(20,Math.min(w,h)*.08);
+    const size=Math.min(w/205,h/235,(w/2-margin)/extentX,(h/2-margin)/extentY);
     gl.viewport(0,0,canvas.width,canvas.height);
     gl.clearColor(0,0,0,0); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
     gl.uniform2f(aspect,2*size/w,2*size/h);
-    gl.uniformMatrix3fv(rotation,false,[...rotate(attitude,[1,0,0]),...rotate(attitude,[0,1,0]),...rotate(attitude,[0,0,1])]);
+    gl.uniformMatrix3fv(rotation,false,[...horizontal,...vertical,...depth]);
     gl.uniform3f(color,.15,.16,.19);
     gl.drawElements(gl.TRIANGLES,skin.triangles.length,gl.UNSIGNED_SHORT,0);
     gl.uniform3f(color,.72,.37,.19);
